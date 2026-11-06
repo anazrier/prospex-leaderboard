@@ -877,7 +877,8 @@ const PRESET_POIN_PLUS_TIM = [
   { label: "Juara games (+5)", poin: 5 },
   { label: "Cekatan saat diberikan tugas (+2)", poin: 2 },
   { label: "Menyampaikan hasil diskusi secara jelas dan terstruktur (+2)", poin: 2 },
-  { label: "Memberikan apresiasi/dukungan untuk kelompok lain (+1)", poin: 1 }
+  { label: "Memberikan apresiasi/dukungan untuk kelompok lain (+1)", poin: 1 },
+  { label: "Anggota kelompok aktif (+1 poin)", poin: 1 },
 ];
 
 // Preset Dropdown Poin Plus Individu
@@ -1190,32 +1191,61 @@ function updateLivePreviewSkorTim() {
 }
 
 function simpanAspekTim(e) {
-  e.preventDefault();
-  if (!selectedKelompokPenilaian) return;
+  if (e) e.preventDefault();
 
-  const form = e.target;
-  const k1 = parseInt(form.kehadiran_kedisiplinan?.value || 0);
-  const k2 = parseInt(form.inisiatif_keaktifan?.value || 0);
-  const k3 = parseInt(form.komunikasi_retorika?.value || 0);
-
-  if (k1 === 0 || k2 === 0 || k3 === 0) {
-    showToastWarning("Harap isi seluruh 3 aspek penilaian!");
+  const kelompokId = selectedKelompokPenilaian;
+  if (!kelompokId || !globalKelompokData[kelompokId]) {
+    if (typeof showToastWarning === "function") showToastWarning("Pilih kelompok terlebih dahulu!");
     return;
   }
 
-  const kData = globalKelompokData[selectedKelompokPenilaian] || {};
-  const poinPlus = kData.poin_plus || 0;
-  const poinMinus = kData.poin_minus || 0;
-  const newTotalSkor = (k1 + k2 + k3) + poinPlus - poinMinus;
+  // 1. Ambil nilai dari radio button yang dicentang (jika ada yang kosong, default ke 0)
+  const radioKehadiran = document.querySelector('input[name="kehadiran_kedisiplinan"]:checked');
+  const radioInisiatif = document.querySelector('input[name="inisiatif_keaktifan"]:checked');
+  const radioKomunikasi = document.querySelector('input[name="komunikasi_retorika"]:checked');
 
-  db.ref('kelompok/' + selectedKelompokPenilaian + '/nilai_aspek').set({
-    kehadiran_kedisiplinan: k1,
-    inisiatif_keaktifan: k2,
-    komunikasi_retorika: k3
-  });
+  const aspek1 = radioKehadiran ? Number(radioKehadiran.value) : 0;
+  const aspek2 = radioInisiatif ? Number(radioInisiatif.value) : 0;
+  const aspek3 = radioKomunikasi ? Number(radioKomunikasi.value) : 0;
 
-  db.ref('kelompok/' + selectedKelompokPenilaian + '/total_skor').set(newTotalSkor).then(() => {
-    showToastSuccess("Nilai aspek tim tersimpan!");
+  // 2. Hitung total aspek baru
+  const totalAspekBaru = aspek1 + aspek2 + aspek3;
+
+  // 3. Ambil data poin plus & minus yang sudah ada sebelumnya agar tidak hilang
+  const kData = globalKelompokData[kelompokId] || {};
+  const poinPlus = Number(kData.poin_plus) || 0;
+  const poinMinus = Number(kData.poin_minus) || 0;
+
+  const totalSkorAkhir = totalAspekBaru + poinPlus - poinMinus;
+
+  // 4. Update data ke Firebase Realtime Database
+  const updates = {};
+  updates[`kelompok/${kelompokId}/nilai_aspek`] = {
+    kehadiran_kedisiplinan: aspek1,
+    inisiatif_keaktifan: aspek2,
+    komunikasi_retorika: aspek3
+  };
+  updates[`kelompok/${kelompokId}/total_skor`] = totalSkorAkhir;
+
+  db.ref().update(updates).then(() => {
+    if (typeof showToastSuccess === "function") {
+      showToastSuccess("✅ Penilaian aspek tim berhasil disimpan!");
+    } else {
+      alert("Penilaian aspek tim berhasil disimpan!");
+    }
+
+    // 5. OTOMATIS RESET FORM & TOMBOL SKALA SETELAH DISAVE
+    // Hapus centang semua radio button di form
+    const formEl = document.getElementById("form-aspek-tim");
+    if (formEl) formEl.reset();
+
+    // Refresh tampilan tab penilaian agar elemen ter-render ulang bersih dari pilihan sebelumnya
+    if (typeof renderTabPenilaian === "function") {
+      renderTabPenilaian();
+    }
+  }).catch(err => {
+    console.error("Gagal menyimpan penilaian tim:", err);
+    if (typeof showToastWarning === "function") showToastWarning("Gagal menyimpan nilai ke database.");
   });
 }
 
@@ -1319,16 +1349,25 @@ function renderPenilaianIndividuContent() {
   }
 
   const pData = globalPesertaData[selectedPesertaPenilaian] || {};
+  
+  // Ambil nilai aspek tersimpan (jika belum ada, default 0 semua)
   const nAspek = pData.nilai_aspek || {
-    problem_solving: 0, kerjasama_integrasi: 0, manajemen_konflik: 0,
-    tanggung_jawab_kemandirian: 0, pemahaman_organisasi: 0, sikap_etika: 0, refleksi_pengembangan: 0
+    problem_solving: 0,
+    kerjasama_integrasi: 0,
+    manajemen_konflik: 0,
+    tanggung_jawab_kemandirian: 0,
+    pemahaman_organisasi: 0,
+    sikap_etika: 0,
+    refleksi_pengembangan: 0
   };
+
   const poinPlus = pData.poin_plus || 0;
   const poinMinus = pData.poin_minus || 0;
 
+  // Hitung total aspek dari nilai yang tersimpan di database
   let totalAspekInitial = 0;
   ASPEK_INDIVIDU_LIST.forEach(a => {
-    totalAspekInitial += (nAspek[a.key] || 0);
+    totalAspekInitial += (Number(nAspek[a.key]) || 0);
   });
   const totalSkorIndividuInitial = totalAspekInitial + poinPlus - poinMinus;
 
@@ -1357,7 +1396,6 @@ function renderPenilaianIndividuContent() {
         <div class="bg-slate-800 border border-slate-700 rounded-xl p-4 space-y-3 shadow-lg">
           <div class="flex flex-col sm:flex-row items-center justify-between gap-3">
             
-            <!-- Search Bar Instant -->
             <div class="relative w-full sm:w-64">
               <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-xs"></i>
               <input type="text" id="input-search-peserta-penilaian" placeholder="Cari NIM / Nama..." value="${currentSearchQueryIndividu}"
@@ -1365,7 +1403,6 @@ function renderPenilaianIndividuContent() {
                 class="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500">
             </div>
 
-            <!-- Select Peserta -->
             <div class="flex items-center gap-2 w-full sm:w-auto flex-1">
               <label class="text-xs font-bold uppercase text-slate-400 whitespace-nowrap">Pilih Peserta:</label>
               <select id="select-peserta-penilaian" onchange="changeSelectedPeserta(this.value)" 
@@ -1389,7 +1426,7 @@ function renderPenilaianIndividuContent() {
           <form id="form-aspek-individu" onsubmit="simpanAspekIndividu(event)" class="space-y-4">
             
             ${ASPEK_INDIVIDU_LIST.map((asp) => {
-              const currentVal = nAspek[asp.key] || 0;
+              const currentVal = Number(nAspek[asp.key]) || 0;
               return `
                 <div class="space-y-2 bg-slate-900/60 p-3 rounded-xl border border-slate-700/60">
                   <div class="flex justify-between items-center text-xs">
@@ -1417,9 +1454,8 @@ function renderPenilaianIndividuContent() {
           </form>
         </div>
 
-        <!-- Preset Poin Plus & Pelanggaran Individu -->
+        <!-- Preset Poin Plus & Pelanggaran -->
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-          
           <div class="bg-slate-800 border border-slate-700 rounded-xl p-4 space-y-3 shadow-lg">
             <h4 class="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
               <i class="fa-solid fa-circle-plus"></i> Tambah Poin Plus Individu
@@ -1447,7 +1483,6 @@ function renderPenilaianIndividuContent() {
               </button>
             </div>
           </div>
-
         </div>
 
       </div>
@@ -1468,7 +1503,6 @@ function renderPenilaianIndividuContent() {
             <div id="rekap-info-ind" class="text-[11px] text-slate-400 font-mono">NIM: ${pData.nim || '-'} | ${namaKelompok}</div>
           </div>
 
-          <!-- Rincian Poin -->
           <div class="space-y-2 text-xs">
             <div class="flex justify-between py-1.5 border-b border-slate-700/60">
               <span class="text-slate-400">Total 7 Aspek (Maks 35):</span>
@@ -1484,7 +1518,6 @@ function renderPenilaianIndividuContent() {
             </div>
           </div>
 
-          <!-- Riwayat Catatan -->
           <div class="space-y-2 pt-2">
             <span class="text-[11px] font-semibold text-slate-400 block">Riwayat Catatan Peserta:</span>
             <div id="rekap-riwayat-ind" class="max-h-40 overflow-y-auto space-y-1 text-[11px]">
@@ -1531,7 +1564,18 @@ function handleSearchPesertaPenilaian(val) {
 function changeSelectedPeserta(id) {
   if (!id) return;
   selectedPesertaPenilaian = id;
-  updateFormDanRekapIndividu(id);
+
+  // Render ulang seluruh konten tab penilaian individu agar form radio button 
+  // di sebelah kiri benar-benar memuat data murni milik peserta yang baru dipilih.
+  const container = document.getElementById("container-penilaian-content");
+  if (container && typeof renderPenilaianIndividuContent === "function") {
+    container.innerHTML = renderPenilaianIndividuContent();
+  }
+
+  // Jika sistem kamu juga memiliki fungsi update terpisah untuk rekap kanan, panggil juga:
+  if (typeof updateFormDanRekapIndividu === "function") {
+    updateFormDanRekapIndividu(id);
+  }
 }
 
 function updateFormDanRekapIndividu(id) {
@@ -1599,26 +1643,52 @@ function updateLivePreviewSkorIndividu() {
 }
 
 function simpanAspekIndividu(e) {
-  e.preventDefault();
-  if (!selectedPesertaPenilaian) return;
+  if (e) e.preventDefault();
 
-  const payloadNilai = {};
-  let totalAspek = 0;
+  const pesertaId = selectedPesertaPenilaian;
+  if (!pesertaId || !globalPesertaData[pesertaId]) {
+    if (typeof showToastWarning === "function") showToastWarning("Pilih peserta terlebih dahulu!");
+    return;
+  }
+
+  // 1. Ambil nilai dari 7 aspek yang dipilih (jika kosong, bernilai 0)
+  const nilaiAspekBaru = {};
+  let totalAspekBaru = 0;
 
   ASPEK_INDIVIDU_LIST.forEach(asp => {
-    const val = parseInt(document.querySelector(`input[name="${asp.key}"]:checked`)?.value || 0);
-    payloadNilai[asp.key] = val;
-    totalAspek += val;
+    const radioSelected = document.querySelector(`input[name="${asp.key}"]:checked`);
+    const val = radioSelected ? Number(radioSelected.value) : 0;
+    nilaiAspekBaru[asp.key] = val;
+    totalAspekBaru += val;
   });
 
-  const pData = globalPesertaData[selectedPesertaPenilaian] || {};
-  const poinPlus = pData.poin_plus || 0;
-  const poinMinus = pData.poin_minus || 0;
-  const newTotalSkor = totalAspek + poinPlus - poinMinus;
+  // 2. Ambil data poin plus & minus saat ini agar tidak terhapus
+  const pData = globalPesertaData[pesertaId] || {};
+  const poinPlus = Number(pData.poin_plus) || 0;
+  const poinMinus = Number(pData.poin_minus) || 0;
+  
+  // Total skor akhir dihitung dari total 7 aspek baru + poin plus - poin minus
+  const totalSkorAkhir = totalAspekBaru + poinPlus - poinMinus;
 
-  db.ref('peserta/' + selectedPesertaPenilaian + '/nilai_aspek').set(payloadNilai);
-  db.ref('peserta/' + selectedPesertaPenilaian + '/total_skor').set(newTotalSkor).then(() => {
-    showToastSuccess("7 Aspek individu tersimpan!");
+  // 3. Simpan nilai aspek dan total skor ke Firebase secara spesifik berdasarkan ID peserta
+  const updates = {};
+  updates[`peserta/${pesertaId}/nilai_aspek`] = nilaiAspekBaru;
+  updates[`peserta/${pesertaId}/total_skor`] = totalSkorAkhir;
+
+  db.ref().update(updates).then(() => {
+    if (typeof showToastSuccess === "function") {
+      showToastSuccess("✅ Penilaian 7 aspek individu berhasil disimpan!");
+    } else {
+      alert("Penilaian 7 aspek individu berhasil disimpan!");
+    }
+
+    // Refresh tampilan agar data tersimpan rapi dan form menampilkan histori peserta tersebut dengan benar
+    if (typeof renderTabPenilaian === "function") {
+      renderTabPenilaian();
+    }
+  }).catch(err => {
+    console.error("Gagal menyimpan aspek individu:", err);
+    if (typeof showToastWarning === "function") showToastWarning("Gagal menyimpan nilai ke database.");
   });
 }
 
